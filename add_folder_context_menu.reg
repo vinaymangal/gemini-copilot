@@ -1,0 +1,7 @@
+Windows Registry Editor Version 5.00
+
+[HKEY_CLASSES_ROOT\Directory\shell\AskGeminiFolder]
+@="Ask Gemini about this folder"
+
+[HKEY_CLASSES_ROOT\Directory\shell\AskGeminiFolder\command]
+@="\"H:\\Vinay\\VINAY\\MY WORK\\Website_App\\gemini-copilot\\dist\\gemini-copilot.exe\" \"%1\""
