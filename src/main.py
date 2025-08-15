@@ -292,7 +292,24 @@ def main():
     conversation_manager = ConversationManager()
     persona_manager = PersonaManager()
     current_persona = persona_manager.get_persona("default")
+
+    # Window Setup with Smart Dimensions
+    window = ctk.CTk()
+    window.title("Gemini Copilot")
     
+    # Set optimal starting size (16:9 ratio, scaled down)
+    window.geometry("1024x640")
+    
+    # Set minimum window size to prevent UI breaking
+    window.minsize(800, 500)
+    
+    # Center window on screen
+    screen_width = window.winfo_screenwidth()
+    screen_height = window.winfo_screenheight()
+    center_x = int((screen_width - 1024) / 2)
+    center_y = int((screen_height - 640) / 2)
+    window.geometry(f"+{center_x}+{center_y}")
+
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("blue")
     window = ctk.CTk()
@@ -303,31 +320,61 @@ def main():
     window.grid_rowconfigure(0, weight=1)
     nav_frame = ctk.CTkFrame(window, width=200, corner_radius=0)
     nav_frame.grid(row=0, column=0, sticky="nsew")
-    nav_frame.grid_rowconfigure(4, weight=1)
-    app_title = ctk.CTkLabel(nav_frame, text="Gemini Copilot", font=ctk.CTkFont(family="Segoe UI Variable", size=20, weight="bold"))
-    app_title.grid(row=0, column=0, padx=20, pady=(20, 10))
-    file_button = ctk.CTkButton(nav_frame, text="Choose File", command=open_file_dialog)
-    file_button.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
-    folder_button = ctk.CTkButton(nav_frame, text="Choose Folder", command=open_folder_dialog)
-    folder_button.grid(row=2, column=0, padx=20, pady=10, sticky="ew")
-    settings_label = ctk.CTkLabel(nav_frame, text="Settings", font=ctk.CTkFont(family="Segoe UI Variable", size=14, weight="bold"))
-    settings_label.grid(row=5, column=0, padx=20, pady=(20, 0))
-    theme_label = ctk.CTkLabel(nav_frame, text="Appearance:")
-    theme_label.grid(row=6, column=0, padx=20, pady=(10, 0), sticky="w")
-    theme_menu = ctk.CTkOptionMenu(nav_frame, values=["Dark", "Light", "System"], command=ctk.set_appearance_mode)
-    theme_menu.grid(row=7, column=0, padx=20, pady=10, sticky="ew")
+    nav_frame.grid_rowconfigure(8, weight=1)  # Push everything up, empty space at bottom
     
-    # Add Settings button to nav_frame
-    settings_button = ctk.CTkButton(
+    # Main title
+    app_title = ctk.CTkLabel(
         nav_frame, 
-        text="AI Personas", 
+        text="Gemini Copilot",
+        font=ctk.CTkFont(family="Segoe UI Variable", size=20, weight="bold")
+    )
+    app_title.grid(row=0, column=0, padx=20, pady=(20, 15))
+
+    # Action buttons section
+    actions_label = ctk.CTkLabel(
+        nav_frame,
+        text="ACTIONS",
+        font=ctk.CTkFont(size=12, weight="bold"),
+        text_color="gray70"
+    )
+    actions_label.grid(row=1, column=0, padx=20, pady=(5, 0), sticky="w")
+    
+    file_button = ctk.CTkButton(nav_frame, text="Choose File", command=open_file_dialog)
+    file_button.grid(row=2, column=0, padx=20, pady=5, sticky="ew")
+    
+    folder_button = ctk.CTkButton(nav_frame, text="Choose Folder", command=open_folder_dialog)
+    folder_button.grid(row=3, column=0, padx=20, pady=5, sticky="ew")
+
+    # Settings section with clear separation
+    settings_label = ctk.CTkLabel(
+        nav_frame,
+        text="SETTINGS",
+        font=ctk.CTkFont(size=12, weight="bold"),
+        text_color="gray70"
+    )
+    settings_label.grid(row=4, column=0, padx=20, pady=(20, 0), sticky="w")
+    
+    personas_button = ctk.CTkButton(
+        nav_frame, 
+        text="Manage AI Personas", 
         command=lambda: PersonaDialog(window, persona_manager)
     )
-    settings_button.grid(row=3, column=0, padx=20, pady=10, sticky="ew")
+    personas_button.grid(row=5, column=0, padx=20, pady=5, sticky="ew")
 
+    # Theme selector
+    theme_label = ctk.CTkLabel(nav_frame, text="Theme:")
+    theme_label.grid(row=6, column=0, padx=20, pady=(10, 0), sticky="w")
+    
+    theme_menu = ctk.CTkOptionMenu(
+        nav_frame, 
+        values=["Dark", "Light", "System"], 
+        command=ctk.set_appearance_mode
+    )
+    theme_menu.grid(row=7, column=0, padx=20, pady=5, sticky="ew")
+    
     # Add Persona Selector
     persona_label = ctk.CTkLabel(nav_frame, text="Active Persona:")
-    persona_label.grid(row=4, column=0, padx=20, pady=(10, 0), sticky="w")
+    persona_label.grid(row=8, column=0, padx=20, pady=(10, 0), sticky="w")
     
     def on_persona_change(choice):
         global current_persona
@@ -338,7 +385,7 @@ def main():
         values=persona_manager.list_personas(),
         command=on_persona_change
     )
-    persona_menu.grid(row=5, column=0, padx=20, pady=10, sticky="ew")
+    persona_menu.grid(row=9, column=0, padx=20, pady=5, sticky="ew")
     persona_menu.set("default")
 
     main_content_frame = ctk.CTkFrame(window, corner_radius=8, fg_color="transparent")
@@ -348,8 +395,22 @@ def main():
     log_textbox = ctk.CTkTextbox(main_content_frame, font=("Segoe UI", 13), corner_radius=8)
     log_textbox.grid(row=0, column=0, columnspan=2, sticky="nsew")
     log_textbox.insert("0.0", "Welcome! I can now read text from images (PNG, JPG) and scanned PDFs.")
-    prompt_entry = ctk.CTkEntry(main_content_frame, placeholder_text="Summarize the content, or type your custom instruction here...", height=35, corner_radius=8)
+    
+    # Prompt entry with Enter key support
+    prompt_entry = ctk.CTkEntry(
+        main_content_frame, 
+        placeholder_text="Summarize the content, or type your custom instruction here...", 
+        height=35, 
+        corner_radius=8
+    )
     prompt_entry.grid(row=1, column=0, padx=(0, 10), pady=10, sticky="ew")
+    
+    # Bind Enter key to submit prompt
+    def on_enter(event):
+        custom_prompt_action()
+    
+    prompt_entry.bind("<Return>", on_enter)
+
     ask_button = ctk.CTkButton(main_content_frame, text="Ask Gemini", command=custom_prompt_action, height=35, corner_radius=8)
     ask_button.grid(row=1, column=1, pady=10, sticky="e")
     util_frame = ctk.CTkFrame(main_content_frame, fg_color="transparent")
