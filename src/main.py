@@ -1,45 +1,96 @@
 import tkinter as tk
-from tkinter import scrolledtext, filedialog
+from tkinter import scrolledtext, filedialog, messagebox
 import keyboard
 from PIL import Image, ImageDraw
 import pystray
 import threading
 import os
-import PyPDF2  # <-- CORRECTED LINE
+import PyPDF2
 import docx
 import openpyxl
+from dotenv import load_dotenv
+import google.generativeai as genai
+
+# --- Load API Key and Configure Gemini ---
+dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+load_dotenv(dotenv_path=dotenv_path)
+api_key = os.getenv("GEMINI_API_KEY")
+if api_key:
+    genai.configure(api_key=api_key)
+else:
+    print("Error: GEMINI_API_KEY not found. Please check your .env file.")
 
 # --- Global variables ---
 window = None
 text_area = None
+original_content = "" # To store the content of the last opened file
+
+# --- Gemini API Function ---
+def call_gemini(prompt_instruction):
+    """
+    Gets text from the text_area, prepends a specific instruction,
+    sends it to Gemini, and displays the response.
+    """
+    global original_content
+    if not text_area or not api_key:
+        return
+
+    # Use the original file content if available, otherwise use current text area content
+    content_to_process = original_content if original_content else text_area.get("1.0", tk.END)
+    
+    if not content_to_process.strip():
+        messagebox.showerror("Error", "There is no content to process.")
+        return
+
+    # The system instruction tells the AI its role.
+    system_instruction = "You are Vinay's Windows Copilot. Be concise, actionable, and format your output clearly."
+    
+    # Combine all parts into the final prompt
+    final_prompt = f"{system_instruction}\n\n---INSTRUCTION---\n{prompt_instruction}\n\n---CONTENT---\n{content_to_process}"
+
+    text_area.delete("1.0", tk.END)
+    text_area.insert("1.0", "Asking Gemini... Please wait.")
+    
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(final_prompt)
+        
+        text_area.delete("1.0", tk.END)
+        text_area.insert("1.0", response.text)
+
+    except Exception as e:
+        text_area.delete("1.0", tk.END)
+        text_area.insert("1.0", f"An error occurred with the Gemini API:\n{e}")
+
+def send_to_gemini_threaded(instruction):
+    """Runs the Gemini API call in a separate thread to avoid freezing the UI."""
+    threading.Thread(target=call_gemini, args=(instruction,), daemon=True).start()
 
 # --- File Reading Functions ---
-
-def read_txt(filepath):
-    """Reads content from a .txt file."""
-    with open(filepath, 'r', encoding='utf-8') as f:
-        return f.read()
-
-def read_pdf(filepath):
-    """Reads content from a .pdf file."""
+def read_file(filepath):
+    global original_content
+    if not text_area: return
+    text_area.delete('1.0', tk.END)
     try:
-        with open(filepath, 'rb') as f:
-            reader = PyPDF2.PdfReader(f)  # <-- CORRECTED LINE
-            content = ""
-            for page in reader.pages:
-                content += page.extract_text() or ""
-            return content
-    except Exception as e:
-        return f"Error reading PDF: {e}"
+        filename = os.path.basename(filepath)
+        text_area.insert(tk.INSERT, f"Reading file: {filename}\n" + "="*30 + "\n\n")
+        _, ext = os.path.splitext(filepath)
+        ext = ext.lower()
+        content = {
+            '.txt': lambda p: open(p, 'r', encoding='utf-8').read(),
+            '.pdf': lambda p: "".join(page.extract_text() or "" for page in PyPDF2.PdfReader(open(p, 'rb')).pages),
+            '.docx': lambda p: "\n".join(para.text for para in docx.Document(p).paragraphs),
+            '.xlsx': read_xlsx # xlsx is more complex, keep separate function
+        }.get(ext, lambda p: f"Unsupported file type: {ext}")(filepath)
+        
+        text_area.insert(tk.INSERT, content)
+        original_content = content # Store the clean content
 
-def read_docx(filepath):
-    """Reads content from a .docx file."""
-    doc = docx.Document(filepath)
-    content = "\n".join([para.text for para in doc.paragraphs])
-    return content
+    except Exception as e:
+        original_content = ""
+        text_area.insert(tk.INSERT, f"An error occurred: {e}")
 
 def read_xlsx(filepath):
-    """Reads content from a .xlsx file."""
     workbook = openpyxl.load_workbook(filepath)
     content = ""
     for sheet_name in workbook.sheetnames:
@@ -49,76 +100,31 @@ def read_xlsx(filepath):
             content += ", ".join([str(cell) if cell is not None else "" for cell in row]) + "\n"
     return content
 
-def read_file(filepath):
-    """
-    Reads a file by detecting its extension and calling the appropriate reader function.
-    """
-    if not text_area:
-        return
-
-    text_area.delete('1.0', tk.END) # Clear previous content
-    try:
-        filename = os.path.basename(filepath)
-        text_area.insert(tk.INSERT, f"Reading file: {filename}\n" + "="*30 + "\n\n")
-        
-        _, extension = os.path.splitext(filepath)
-        extension = extension.lower()
-
-        content = ""
-        if extension == '.txt':
-            content = read_txt(filepath)
-        elif extension == '.pdf':
-            content = read_pdf(filepath)
-        elif extension == '.docx':
-            content = read_docx(filepath)
-        elif extension == '.xlsx':
-            content = read_xlsx(filepath)
-        else:
-            content = f"Unsupported file type: {extension}"
-        
-        text_area.insert(tk.INSERT, content)
-
-    except Exception as e:
-        text_area.insert(tk.INSERT, f"An error occurred: {e}")
-
 def open_file_dialog():
-    """Opens a file dialog to select a file and then reads it."""
     filepath = filedialog.askopenfilename()
-    if filepath:
-        # Run file reading in a separate thread to keep the UI responsive
-        threading.Thread(target=read_file, args=(filepath,), daemon=True).start()
+    if filepath: threading.Thread(target=read_file, args=(filepath,), daemon=True).start()
 
-# --- Window and Tray Management ---
-
+# --- Window and Tray Management (Identical to previous version) ---
 def create_image():
-    width = 64; height = 64; color1 = "black"; color2 = "white"
+    width=64; height=64; color1="black"; color2="white"
     image = Image.new("RGB", (width, height), color1)
     dc = ImageDraw.Draw(image)
     dc.rectangle((width // 2, 0, width, height // 2), fill=color2)
     dc.rectangle((0, height // 2, width // 2, height), fill=color2)
     return image
-
 def show_window():
-    if window:
-        window.deiconify(); window.lift(); window.focus_force()
-
+    if window: window.deiconify(); window.lift(); window.focus_force()
 def hide_window():
-    if window:
-        window.withdraw()
-
+    if window: window.withdraw()
 def toggle_window():
-    if window:
-        if window.state() == "withdrawn": show_window()
-        else: hide_window()
-
+    if window and window.state() == "withdrawn": show_window()
+    elif window: hide_window()
 def quit_app(icon, item):
     icon.stop()
     if window: window.quit()
-
 def setup_tray():
     image = create_image()
-    menu = (pystray.MenuItem("Show/Hide", toggle_window, default=True),
-            pystray.MenuItem("Quit", quit_app))
+    menu = (pystray.MenuItem("Show/Hide", toggle_window, default=True), pystray.MenuItem("Quit", quit_app))
     icon = pystray.Icon("gemini_copilot", image, "Gemini Copilot", menu)
     icon.run()
 
@@ -126,25 +132,33 @@ def main():
     global window, text_area
     window = tk.Tk()
     window.title("Gemini Copilot")
-    window.geometry("600x500")
+    window.geometry("700x500") # Made window slightly wider
     window.protocol("WM_DELETE_WINDOW", hide_window)
 
     main_frame = tk.Frame(window, padx=10, pady=10)
     main_frame.pack(fill=tk.BOTH, expand=True)
 
-    # Create a frame for buttons
-    button_frame = tk.Frame(main_frame)
-    button_frame.pack(fill=tk.X, pady=(0, 10))
+    # --- NEW: Action Buttons Frame ---
+    action_frame = tk.Frame(main_frame)
+    action_frame.pack(fill=tk.X, pady=(0, 10))
 
-    choose_file_button = tk.Button(button_frame, text="Choose File", font=("Segoe UI", 10), command=open_file_dialog)
-    choose_file_button.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
+    # We use lambda to pass the specific instruction text to our function
+    summarize_button = tk.Button(action_frame, text="Summarize", font=("Segoe UI", 10), command=lambda: send_to_gemini_threaded("Summarize the following content."))
+    summarize_button.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
 
-    send_button = tk.Button(button_frame, text="Send to Gemini", font=("Segoe UI", 10))
-    send_button.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(5, 0))
+    key_points_button = tk.Button(action_frame, text="Key Points", font=("Segoe UI", 10), command=lambda: send_to_gemini_threaded("Extract the key points from the following content as a bulleted list."))
+    key_points_button.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
+    
+    actions_button = tk.Button(action_frame, text="Next Actions", font=("Segoe UI", 10), command=lambda: send_to_gemini_threaded("List the potential next actions or to-do items from the following content."))
+    actions_button.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 0))
+
+    # --- File and Text Area ---
+    file_button = tk.Button(main_frame, text="Choose File...", font=("Segoe UI", 10), command=open_file_dialog)
+    file_button.pack(fill=tk.X, pady=(0, 10))
 
     text_area = scrolledtext.ScrolledText(main_frame, wrap=tk.WORD, height=15, font=("Segoe UI", 10))
     text_area.pack(fill=tk.BOTH, expand=True)
-    text_area.insert(tk.INSERT, "Welcome! Choose a file or type a question.")
+    text_area.insert(tk.INSERT, "Welcome! Choose a file and then select an action above.")
 
     hide_window()
     window.mainloop()
