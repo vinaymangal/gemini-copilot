@@ -17,6 +17,11 @@ import queue
 import pytesseract
 import fitz # PyMuPDF
 import io
+from typing import List, Tuple
+from dataclasses import dataclass
+from datetime import datetime
+from persona_manager import PersonaManager
+from settings_dialog import PersonaDialog
 
 # --- Tesseract Configuration ---
 try:
@@ -39,10 +44,40 @@ prompt_entry = None
 update_queue = queue.Queue()
 processed_content = ""
 processed_filenames = []
+persona_manager = None
+current_persona = None
+
+@dataclass
+class ChatMessage:
+    role: str  # 'user' or 'assistant'
+    content: str
+    timestamp: datetime
+
+class ConversationManager:
+    def __init__(self):
+        self.history: List[ChatMessage] = []
+        self.max_history = 10  # Keep last 10 messages for context
+
+    def add_message(self, role: str, content: str):
+        self.history.append(ChatMessage(role=role, content=content, timestamp=datetime.now()))
+        if len(self.history) > self.max_history:
+            self.history.pop(0)  # Remove oldest message
+
+    def get_context(self) -> str:
+        if not self.history:
+            return ""
+        
+        context = "Previous conversation:\n"
+        for msg in self.history[-3:]:  # Last 3 messages for immediate context
+            context += f"{msg.role}: {msg.content}\n"
+        return context
+
+    def clear(self):
+        self.history.clear()
 
 # --- Gemini API Function (UPDATED WITH "PROMPT AUGMENTATION") ---
 def call_gemini(instruction):
-    global processed_content, processed_filenames
+    global processed_content, processed_filenames, conversation_manager
     if not log_textbox or not api_key: 
         messagebox.showerror("API Key Error", "Gemini API Key not found.")
         return
@@ -53,28 +88,25 @@ def call_gemini(instruction):
         messagebox.showerror("Error", "Please provide an instruction in the prompt box.")
         return
 
-    system_instruction = "You are Vinay's Windows Copilot. Be concise, actionable, and format your output clearly."
+    # Get conversation context
+    chat_context = conversation_manager.get_context()
     
-    # --- THIS IS THE FIX: "Prompt Augmentation" ---
-    # We take the user's instruction and wrap it in a more specific, non-negotiable command.
-    # This removes all ambiguity for the AI.
-    # Force the AI to address every file explicitly
+    # Format files list
     formatted_files = "\n".join([
         f"File {i+1}: {filename}" 
         for i, filename in enumerate(processed_filenames)
     ])
-    
-    augmented_instruction = (
-        f"Analyze and respond to this instruction: '{instruction}'\n\n"
-        f"You MUST address the content from EACH of these files:\n{formatted_files}\n\n"
-        f"Format your response to explicitly mention what you found in each file.\n"
-        f"Do not skip any file, even if it seems less important."
+
+    system_instruction = (
+        "You are Vinay's Windows Copilot. Be concise and clear.\n"
+        "If you're answering a follow-up question, use the conversation history for context."
     )
 
     final_prompt = (
         f"{system_instruction}\n\n"
-        f"--- FILES TO ANALYZE ---\n{formatted_files}\n\n"
-        f"--- INSTRUCTION ---\n{augmented_instruction}\n\n"
+        f"--- CONVERSATION HISTORY ---\n{chat_context}\n\n"
+        f"--- FILES ANALYZED ---\n{formatted_files}\n\n"
+        f"--- NEW INSTRUCTION ---\n{instruction}\n\n"
         f"--- CONTENT ---\n{processed_content}"
     )
     
@@ -83,6 +115,11 @@ def call_gemini(instruction):
     try:
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(final_prompt)
+        
+        # Store the conversation
+        conversation_manager.add_message("user", instruction)
+        conversation_manager.add_message("assistant", response.text)
+        
         log_textbox.insert(tk.END, "--- GEMINI RESPONSE ---\n" + response.text)
     except Exception as e:
         log_textbox.insert(tk.END, f"An error occurred with the Gemini API:\n{e}")
@@ -216,11 +253,12 @@ def copy_to_clipboard():
         messagebox.showinfo("Copied", "Log & Response copied to clipboard.")
 
 def clear_text_area():
-    global processed_content, processed_filenames
+    global processed_content, processed_filenames, conversation_manager
     if log_textbox:
         log_textbox.delete("1.0", tk.END)
         processed_content = ""
         processed_filenames = []
+        conversation_manager.clear()
 
 # --- Window and Tray Management (Unchanged) ---
 def create_image():
@@ -248,7 +286,13 @@ def setup_tray():
 
 # --- Main UI Function (Unchanged) ---
 def main():
-    global window, log_textbox, prompt_entry
+    global window, log_textbox, prompt_entry, conversation_manager, persona_manager, current_persona
+    
+    # Initialize managers
+    conversation_manager = ConversationManager()
+    persona_manager = PersonaManager()
+    current_persona = persona_manager.get_persona("default")
+    
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("blue")
     window = ctk.CTk()
@@ -272,6 +316,31 @@ def main():
     theme_label.grid(row=6, column=0, padx=20, pady=(10, 0), sticky="w")
     theme_menu = ctk.CTkOptionMenu(nav_frame, values=["Dark", "Light", "System"], command=ctk.set_appearance_mode)
     theme_menu.grid(row=7, column=0, padx=20, pady=10, sticky="ew")
+    
+    # Add Settings button to nav_frame
+    settings_button = ctk.CTkButton(
+        nav_frame, 
+        text="AI Personas", 
+        command=lambda: PersonaDialog(window, persona_manager)
+    )
+    settings_button.grid(row=3, column=0, padx=20, pady=10, sticky="ew")
+
+    # Add Persona Selector
+    persona_label = ctk.CTkLabel(nav_frame, text="Active Persona:")
+    persona_label.grid(row=4, column=0, padx=20, pady=(10, 0), sticky="w")
+    
+    def on_persona_change(choice):
+        global current_persona
+        current_persona = persona_manager.get_persona(choice)
+    
+    persona_menu = ctk.CTkOptionMenu(
+        nav_frame,
+        values=persona_manager.list_personas(),
+        command=on_persona_change
+    )
+    persona_menu.grid(row=5, column=0, padx=20, pady=10, sticky="ew")
+    persona_menu.set("default")
+
     main_content_frame = ctk.CTkFrame(window, corner_radius=8, fg_color="transparent")
     main_content_frame.grid(row=0, column=1, padx=20, pady=20, sticky="nsew")
     main_content_frame.grid_columnconfigure(0, weight=1)
